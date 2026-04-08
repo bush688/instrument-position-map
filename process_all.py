@@ -223,35 +223,43 @@ def analyze_pages(orig_pdf_path, ocr_pdf_path):
     分析每一页，返回：
     [{'has_map': bool, 'has_table': bool,
       'table': [(seq,tag,sx,sy),...], 'positions': [...]}]
+
+    逐页打开 PDF（每页独立 open/close）以避免 pdfminer 在大型 PDF
+    上缓存全部页面内容导致内存爆炸。
     """
-    with pdfplumber.open(orig_pdf_path) as orig_pdf, \
-         pdfplumber.open(ocr_pdf_path) as ocr_pdf:
+    # 先获取页数
+    with pdfplumber.open(orig_pdf_path) as f:
+        n_orig = len(f.pages)
+    with pdfplumber.open(ocr_pdf_path) as f:
+        n_ocr = len(f.pages)
+    n_pages = max(n_orig, n_ocr)
 
-        n_pages = max(len(orig_pdf.pages), len(ocr_pdf.pages))
-        pages = []
+    pages = []
+    for pi in range(n_pages):
+        info = {'has_map': False, 'has_table': False, 'table': [], 'positions': []}
 
-        for pi in range(n_pages):
-            info = {'has_map': False, 'has_table': False, 'table': [], 'positions': []}
-
-            # ── 表格（来自 OCR PDF）
-            if pi < len(ocr_pdf.pages):
+        # ── 表格（来自 OCR PDF）— 每页独立 open 避免内存累积
+        if pi < n_ocr:
+            with pdfplumber.open(ocr_pdf_path) as ocr_pdf:
                 table = extract_table_coords(ocr_pdf.pages[pi])
-            else:
-                table = []
+        else:
+            table = []
 
-            if table:
-                info['has_table'] = True
-                info['table'] = table
+        if table:
+            info['has_table'] = True
+            info['table'] = table
 
-            # ── 位置图序号（来自原始 PDF）
-            if pi < len(orig_pdf.pages):
+        # ── 位置图序号（来自原始 PDF）
+        if pi < n_orig:
+            with pdfplumber.open(orig_pdf_path) as orig_pdf:
                 pos = extract_map_numbers(orig_pdf.pages[pi], table)
                 # 少于阈值时忽略（边框/标题栏误检），该页视为纯表格页
                 if len(pos) >= MIN_MAP_POSITIONS:
                     info['has_map'] = True
                     info['positions'] = pos
 
-            pages.append(info)
+        pages.append(info)
+        print(f"    analyzed page {pi+1}/{n_pages}", flush=True)
 
     return pages
 

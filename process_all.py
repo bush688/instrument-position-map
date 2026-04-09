@@ -59,6 +59,7 @@ def extract_table_coords(page):
 
     # 为每个 tag 找同行（dy≤10）最近的序号（在其左侧，dx<600）
     raw_pairs = []
+    unmatched_tags = []  # 有 tag 但找不到同行 seq 的条目
     for tx, ty, tag in tag_words:
         best = None
         best_score = float('inf')
@@ -73,6 +74,8 @@ def extract_table_coords(page):
                 best = (sx, sy, seq)
         if best is not None:
             raw_pairs.append((best[0], best[1], best[2], tx, ty, tag))
+        else:
+            unmatched_tags.append((tx, ty, tag))
 
     if not raw_pairs:
         return []
@@ -84,6 +87,43 @@ def extract_table_coords(page):
         dx = p[3] - p[0]
         if seq not in seen or dx < (seen[seq][3] - seen[seq][0]):
             seen[seq] = p
+
+    # ── 间隙填补：补充 seq 序号缺失的条目 ────────────────────────
+    # 某些页面中部分行的序号是矢量图形，pdfplumber 无法提取文本。
+    # 策略：找到两个相邻 seq 之间的孤立 tag，按 y 坐标顺序分配缺失的序号。
+    if unmatched_tags:
+        # 已配对的 seq 按 y 排序
+        known = sorted(seen.values(), key=lambda p: p[1])   # sorted by sy
+        # 用来获取第一列 x 坐标的近似值（seq 列的 x）
+        seq_col_x = known[0][0] if known else 0
+
+        for tx, ty, tag in sorted(unmatched_tags, key=lambda t: t[1]):
+            # 找紧邻的 prev_seq（y < ty）和 next_seq（y > ty）
+            before = [(p[2], p[1]) for p in known if p[1] < ty]
+            after  = [(p[2], p[1]) for p in known if p[1] > ty]
+            if not before or not after:
+                continue
+            prev_seq = max(before, key=lambda x: x[1])[0]
+            next_seq = min(after,  key=lambda x: x[1])[0]
+            gap = next_seq - prev_seq  # e.g. 25 - 23 = 2
+
+            # 统计同一区间内还有多少 unmatched tag
+            peers = [(ux, uy, ut) for ux, uy, ut in unmatched_tags
+                     if uy > min(p[1] for p in known if p[2] == prev_seq)
+                     and uy < min(p[1] for p in known if p[2] == next_seq)]
+            peers_sorted = sorted(peers, key=lambda t: t[1])
+            if gap - 1 > 5:
+                # 间隙过大（>5 个缺失序号），大概率是子条目而非缺号，跳过
+                continue
+            if len(peers_sorted) != gap - 1:
+                # 孤立 tag 数量与 seq 空缺数量不一致，跳过（避免误配）
+                continue
+
+            idx = peers_sorted.index((tx, ty, tag))
+            inferred_seq = prev_seq + 1 + idx
+            if inferred_seq not in seen:
+                # 用 seq_col_x 作为假序号列坐标，ty 作为行 y
+                seen[inferred_seq] = (seq_col_x, ty, inferred_seq, tx, ty, tag)
 
     # 按 Y 分桶（桶高 35pt）再按 X 排序，实现"逐行从左到右"展开
     ROW_H = 35
@@ -207,6 +247,11 @@ def render_images(orig_pdf_path, page_idx, positions, tag_map, drawing_name, out
         draw.text((x - 6, y - 45), num, fill='red', font=FONT)
         draw.text((x + 36, y - 12), tag, fill='red', font=FONT)
         fname = f"{drawing_name}_page{page_idx + 1}_{num}_{tag}.png"
+        # 删除同页同序号但 tag 不同的旧文件（重新处理时 tag 可能修正）
+        prefix = f"{drawing_name}_page{page_idx + 1}_{num}_"
+        for old in os.listdir(out_dir):
+            if old.startswith(prefix) and old != fname:
+                os.remove(os.path.join(out_dir, old))
         img.save(os.path.join(out_dir, fname), 'PNG')
         count += 1
     return count

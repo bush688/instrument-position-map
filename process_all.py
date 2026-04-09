@@ -91,6 +91,7 @@ def extract_table_coords(page):
     # ── 间隙填补：补充 seq 序号缺失的条目 ────────────────────────
     # 某些页面中部分行的序号是矢量图形，pdfplumber 无法提取文本。
     # 策略：找到两个相邻 seq 之间的孤立 tag，按 y 坐标顺序分配缺失的序号。
+    gap_filled: set[int] = set()
     if unmatched_tags:
         # 已配对的 seq 按 y 排序
         known = sorted(seen.values(), key=lambda p: p[1])   # sorted by sy
@@ -124,13 +125,37 @@ def extract_table_coords(page):
             if inferred_seq not in seen:
                 # 用 seq_col_x 作为假序号列坐标，ty 作为行 y
                 seen[inferred_seq] = (seq_col_x, ty, inferred_seq, tx, ty, tag)
+                gap_filled.add(inferred_seq)
+
+    # ── 子条目关联：将剩余未匹配的 tag 关联到最近的上级 seq ────────────
+    # 阀门附件（XZSO/XZSC/XVY/XZVY/PVY/PZVY 等）在表格中没有独立序号，
+    # 它们与上一行的主仪表共享同一位置圆圈。
+    # 将这些 tag 关联到最近的前驱 seq，使查询系统能通过附件 tag 找到位置。
+    # 限制：若 tag 距父级超过 200pt（大约 9 行），视为图框/说明文字，跳过。
+    MAX_SUB_DIST = 200  # pt
+    sub_entries: list[tuple] = []  # 额外的 (sx, sy, seq, tx, ty, tag) 条目
+    gap_filled_tags = {seen[s][5] for s in gap_filled}
+    for tx, ty, tag in unmatched_tags:
+        if tag in gap_filled_tags:
+            continue  # 已通过间隙填补处理
+        # 找 y 坐标小于 ty 的最近已匹配 seq
+        before = [(p[2], p[1], p[0]) for p in seen.values() if p[1] < ty]
+        if not before:
+            continue
+        parent_seq, parent_sy, parent_sx = max(before, key=lambda x: x[1])
+        if ty - parent_sy > MAX_SUB_DIST:
+            # 距父级过远，大概率是图框/修订栏中的说明文字，跳过
+            continue
+        # 以父级的序号列坐标作为此子条目的位置标识
+        sub_entries.append((parent_sx, parent_sy, parent_seq, tx, ty, tag))
 
     # 按 Y 分桶（桶高 35pt）再按 X 排序，实现"逐行从左到右"展开
     ROW_H = 35
-    result = sorted(seen.values(), key=lambda p: (round(p[1] / ROW_H), p[0]))
+    main_entries = sorted(seen.values(), key=lambda p: (round(p[1] / ROW_H), p[0]))
+    all_entries = main_entries + sub_entries  # 子条目追加到末尾（同序号排在主条目后）
 
     # 返回 (seq_int, tag_str, seq_x, seq_y)
-    return [(p[2], p[5], p[0], p[1]) for p in result]
+    return [(p[2], p[5], p[0], p[1]) for p in all_entries]
 
 
 # ─────────────────────────────────────────────
@@ -203,22 +228,25 @@ def extract_map_numbers(orig_page, table_entries):
 
 def build_tag_map(position_numbers, table_entries):
     """
-    将位置图序号映射到位号（含继承逻辑）。
+    将位置图序号映射到位号列表（含继承逻辑，支持每个序号多个位号）。
     table_entries: [(seq_int, tag_str, sx, sy), ...]  已按正确顺序排列
+    同一 seq 的多条记录（主仪表 + 附件）会合并为一个列表。
     """
-    # 只用 seq→tag 映射，忽略坐标
-    first_idx = {}
-    for idx, (seq, tag, sx, sy) in enumerate(table_entries):
-        if seq not in first_idx:
-            first_idx[seq] = tag
+    # seq → [tag, ...] （保持插入顺序，主仪表在前，附件在后）
+    seq_tags: dict[int, list[str]] = {}
+    for seq, tag, sx, sy in table_entries:
+        if seq not in seq_tags:
+            seq_tags[seq] = []
+        if tag not in seq_tags[seq]:
+            seq_tags[seq].append(tag)
 
-    tag_map = {}
-    last_tag = ''
+    tag_map: dict[str, list[str]] = {}
+    last_tags: list[str] = []
     for p in position_numbers:
         n = int(p['num'])
-        if n in first_idx:
-            last_tag = first_idx[n]
-        tag_map[p['num']] = last_tag
+        if n in seq_tags:
+            last_tags = seq_tags[n]
+        tag_map[p['num']] = last_tags
     return tag_map
 
 
@@ -227,33 +255,46 @@ def build_tag_map(position_numbers, table_entries):
 # ─────────────────────────────────────────────
 
 def render_images(orig_pdf_path, page_idx, positions, tag_map, drawing_name, out_dir):
-    """在原始 PDF 页面上标注序号→位号，每个序号生成一张图片。"""
+    """在原始 PDF 页面上标注序号→位号，每个（序号, 位号）生成一张图片。
+    同一序号有多个位号（主仪表 + 附件）时，每个位号各生成一张图片，
+    标注内容相同（同一圆圈位置），文件名中的位号不同。
+    """
     pdf_doc = pdfium.PdfDocument(orig_pdf_path)
     if page_idx >= len(pdf_doc):
         return 0
     base_img = pdf_doc[page_idx].render(scale=SCALE).to_pil()
+
+    page_prefix = f"{drawing_name}_page{page_idx + 1}_"
+    expected_fnames: set[str] = set()
     count = 0
+
     for p in positions:
         num = p['num']
-        tag = tag_map.get(num, '')
-        if not tag:
+        tags = tag_map.get(num, [])
+        if not tags:
             continue
         img = base_img.copy()
         draw = ImageDraw.Draw(img)
         x = p['x'] * SCALE
         y = p['y'] * SCALE
         r = 32
+        # 标注第一个（主）位号；所有子图共用同一标注图
+        main_tag = tags[0]
         draw.ellipse([x - r, y - r, x + r, y + r], outline='red', width=3)
         draw.text((x - 6, y - 45), num, fill='red', font=FONT)
-        draw.text((x + 36, y - 12), tag, fill='red', font=FONT)
-        fname = f"{drawing_name}_page{page_idx + 1}_{num}_{tag}.png"
-        # 删除同页同序号但 tag 不同的旧文件（重新处理时 tag 可能修正）
-        prefix = f"{drawing_name}_page{page_idx + 1}_{num}_"
-        for old in os.listdir(out_dir):
-            if old.startswith(prefix) and old != fname:
-                os.remove(os.path.join(out_dir, old))
-        img.save(os.path.join(out_dir, fname), 'PNG')
-        count += 1
+        draw.text((x + 36, y - 12), main_tag, fill='red', font=FONT)
+
+        for tag in tags:
+            fname = f"{page_prefix}{num}_{tag}.png"
+            expected_fnames.add(fname)
+            img.save(os.path.join(out_dir, fname), 'PNG')
+            count += 1
+
+    # 删除本页中已不再需要的旧文件（同页前缀，但不在本次期望集中）
+    for old in os.listdir(out_dir):
+        if old.startswith(page_prefix) and old not in expected_fnames:
+            os.remove(os.path.join(out_dir, old))
+
     return count
 
 
@@ -385,8 +426,10 @@ def process_drawing(drawing_name, orig_pdf, ocr_pdf):
         n = render_images(orig_pdf, pos_idx, positions, tag_map, drawing_name, out_dir)
         total += n
         covered = sum(1 for p in positions if tag_map.get(p['num']))
+        # 统计主条目数（每 seq 只计一次）vs 含附件的总图片数
+        unique_seqs = len({seq for seq, tag, sx, sy in table_entries})
         print(f"    page{pos_idx+1}: {len(positions)} pos | "
-              f"{len(table_entries)} tbl entries | "
+              f"{unique_seqs} tbl seqs ({len(table_entries)} w/ sub-entries) | "
               f"{covered} mapped | {n} images")
 
     print(f"  TOTAL: {total} images")

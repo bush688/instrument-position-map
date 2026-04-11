@@ -21,3 +21,6 @@ page*.png
 # Python 缓存
 __pycache__/
 *.pyc
+
+# Docker 数据目录（不入库，由用户自行上传）
+docker/data/

@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仪表位置图查询系统</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #f4f6f9;
+    color: #333;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: linear-gradient(135deg, #1a3a5c 0%, #2563a8 100%);
+    color: #fff;
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.25);
+  }
+  header h1 { font-size: 1.3rem; font-weight: 600; letter-spacing: .5px; }
+  header .subtitle { font-size: .8rem; opacity: .75; margin-top: 2px; }
+  .header-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .btn-download {
+    padding: 7px 14px;
+    background: rgba(255,255,255,.18);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.35);
+    border-radius: 6px;
+    font-size: .82rem;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: background .2s;
+  }
+  .btn-download:hover { background: rgba(255,255,255,.3); }
+
+  /* ── Search bar ── */
+  .search-bar {
+    background: #fff;
+    border-bottom: 1px solid #dde3ec;
+    padding: 14px 24px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .search-bar input[type="text"] {
+    flex: 1 1 260px;
+    padding: 9px 14px;
+    font-size: .95rem;
+    border: 1px solid #c8d0dc;
+    border-radius: 6px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .search-bar input[type="text"]:focus { border-color: #2563a8; }
+  .search-bar select {
+    padding: 9px 12px;
+    font-size: .9rem;
+    border: 1px solid #c8d0dc;
+    border-radius: 6px;
+    background: #fff;
+    cursor: pointer;
+    outline: none;
+  }
+  .search-bar button {
+    padding: 9px 22px;
+    background: #2563a8;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: .95rem;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .search-bar button:hover { background: #1a4d8a; }
+
+  /* ── Main ── */
+  main { padding: 20px 24px; }
+  .status { font-size: .85rem; color: #666; margin-bottom: 16px; min-height: 22px; }
+  .status .count { font-weight: 600; color: #2563a8; }
+  .status .warn  { color: #b35d00; }
+
+  /* ── Stats cards ── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #fff;
+    border-radius: 8px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    cursor: pointer;
+    transition: box-shadow .15s, transform .15s;
+    border-left: 3px solid #2563a8;
+  }
+  .stat-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,.14); transform: translateY(-1px); }
+  .stat-card .label { font-size: .8rem; color: #888; margin-bottom: 4px; }
+  .stat-card .num   { font-size: 1.5rem; font-weight: 700; color: #2563a8; }
+  .stat-card .sub   { font-size: .75rem; color: #aaa; margin-top: 2px; }
+
+  /* ── Results grid ── */
+  .results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.09);
+    overflow: hidden;
+    cursor: pointer;
+    transition: box-shadow .15s, transform .15s;
+  }
+  .card:hover { box-shadow: 0 4px 14px rgba(0,0,0,.16); transform: translateY(-2px); }
+  .card img {
+    width: 100%;
+    height: 180px;
+    object-fit: contain;
+    background: #f7f8fa;
+    display: block;
+    border-bottom: 1px solid #eef0f4;
+  }
+  .card-info { padding: 10px 12px; }
+  .card-tag  { font-size: .9rem; font-weight: 700; color: #1a3a5c; word-break: break-all; }
+  .card-meta { font-size: .75rem; color: #888; margin-top: 4px; }
+
+  /* ── Empty/loading ── */
+  .hint { text-align: center; padding: 60px 20px; color: #aaa; font-size: .95rem; }
+  .hint .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+  /* ── Lightbox ── */
+  #lightbox {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.88);
+    z-index: 1000;
+    flex-direction: column;
+  }
+  #lightbox.open { display: flex; }
+
+  #lb-viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+  }
+  #lb-viewport.dragging { cursor: grabbing; }
+  #lb-img {
+    max-width: 92vw;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 2px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.5);
+    transform-origin: center center;
+    user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
+  }
+
+  #lb-bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: rgba(0,0,0,.5);
+    color: #fff;
+    gap: 12px;
+  }
+  #lb-info { text-align: center; flex: 1; }
+  #lb-info .lb-tag  { font-size: 1rem; font-weight: 700; }
+  #lb-info .lb-meta { opacity: .65; font-size: .78rem; margin-top: 2px; }
+
+  .lb-btns { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .lb-btn {
+    background: rgba(255,255,255,.15);
+    border: none; color: #fff;
+    width: 32px; height: 32px;
+    border-radius: 6px; font-size: 1rem;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .lb-btn:hover { background: rgba(255,255,255,.28); }
+  #lb-zoom-label { font-size: .8rem; opacity: .7; min-width: 40px; text-align: center; }
+
+  #lb-close {
+    position: fixed; top: 10px; right: 16px;
+    color: #fff; font-size: 1.8rem; cursor: pointer;
+    opacity: .75; z-index: 1001;
+  }
+  #lb-close:hover { opacity: 1; }
+  #lb-prev, #lb-next {
+    position: fixed; top: 50%; transform: translateY(-50%);
+    color: #fff; font-size: 2.4rem; cursor: pointer;
+    opacity: .5; user-select: none; padding: 14px 10px;
+    z-index: 1001;
+  }
+  #lb-prev:hover, #lb-next:hover { opacity: 1; }
+  #lb-prev { left: 4px; }
+  #lb-next { right: 4px; }
+  #lb-counter { opacity: .6; font-size: .78rem; flex-shrink: 0; min-width: 48px; text-align: right; }
+
+  @media (max-width: 540px) {
+    .search-bar { padding: 10px 14px; }
+    main { padding: 14px; }
+    .results-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+    .header-actions { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>仪表位置图查询系统</h1>
+    <div class="subtitle" id="header-stats">加载中…</div>
+  </div>
+  <div class="header-actions">
+    <a class="btn-download" href="/api/download/excel" download>
+      &#128196; 下载汇总表
+    </a>
+  </div>
+</header>
+
+<div class="search-bar">
+  <input type="text" id="q" placeholder="输入位号（如 FT-03001、PT、LT-04）" autocomplete="off">
+  <select id="drawing-filter">
+    <option value="">全部图纸</option>
+    <!-- populated by loadStats() -->
+  </select>
+  <button onclick="doSearch()">搜索</button>
+</div>
+
+<main>
+  <div class="status" id="status"></div>
+  <div id="content">
+    <div id="stats-view">
+      <div class="stats-grid" id="stats-grid"></div>
+    </div>
+    <div class="results-grid" id="results-grid" style="display:none"></div>
+    <div class="hint" id="hint-empty" style="display:none">
+      <div class="icon">&#128269;</div>未找到匹配的仪表位号
+    </div>
+  </div>
+</main>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <span id="lb-close" onclick="closeLightbox()">&#x2715;</span>
+  <span id="lb-prev"  onclick="lbNav(-1)">&#x2039;</span>
+  <span id="lb-next"  onclick="lbNav(1)">&#x203a;</span>
+
+  <div id="lb-viewport">
+    <img id="lb-img" src="" alt="" draggable="false">
+  </div>
+
+  <div id="lb-bar">
+    <div class="lb-btns">
+      <button class="lb-btn" onclick="lbZoom(0.8)"   title="缩小 (−)">&#x2212;</button>
+      <button class="lb-btn" onclick="lbResetZoom()" title="重置 (0)">&#x2299;</button>
+      <button class="lb-btn" onclick="lbZoom(1.25)"  title="放大 (+)">&#x2b;</button>
+      <span id="lb-zoom-label">100%</span>
+    </div>
+    <div id="lb-info">
+      <div class="lb-tag"  id="lb-tag"></div>
+      <div class="lb-meta" id="lb-meta"></div>
+    </div>
+    <div id="lb-counter"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let currentResults = [];
+let lbIndex = 0;
+
+// ── Debounced search ──────────────────────────────────────
+let debTimer = null;
+document.getElementById('q').addEventListener('input', () => {
+  clearTimeout(debTimer);
+  const v = document.getElementById('q').value.trim();
+  if (v.length >= 2) debTimer = setTimeout(doSearch, 350);
+  else if (v.length === 0) showStats();
+});
+document.getElementById('q').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { clearTimeout(debTimer); doSearch(); }
+});
+
+// ── Search ───────────────────────────────────────────────
+async function doSearch() {
+  const q       = document.getElementById('q').value.trim();
+  const drawing = document.getElementById('drawing-filter').value;
+  if (!q) { showStats(); return; }
+
+  setStatus('搜索中…');
+  hide('stats-view'); hide('hint-empty');
+  show('results-grid', 'grid');
+
+  const url = `/api/search?q=${encodeURIComponent(q)}&drawing=${encodeURIComponent(drawing)}`;
+  try {
+    const data = await fetchJSON(url);
+    currentResults = data.results;
+    renderResults(data);
+    pushUrl(q, drawing);
+  } catch (e) { setStatus('请求失败: ' + e.message); }
+}
+
+function renderResults(data) {
+  const grid = document.getElementById('results-grid');
+  grid.innerHTML = '';
+
+  if (data.count === 0) {
+    hide('results-grid'); show('hint-empty'); setStatus(''); return;
+  }
+  const warn = data.truncated
+    ? ` <span class="warn">(仅显示前 200 条)</span>` : '';
+  setStatus(`找到 <span class="count">${data.count}</span> 条结果${warn}`);
+
+  data.results.forEach((r, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const meta = [
+      r.drawing_label,
+      r.page != null ? `第 ${r.page} 页` : '',
+      r.seq  != null ? `序号 ${r.seq}` : '',
+    ].filter(Boolean).join(' · ');
+    card.innerHTML =
+      `<img src="${r.image_url}" loading="lazy" alt="${r.tag}">
+       <div class="card-info">
+         <div class="card-tag">${r.tag}</div>
+         <div class="card-meta">${meta}</div>
+       </div>`;
+    card.onclick = () => openLightbox(i);
+    grid.appendChild(card);
+  });
+}
+
+// ── Stats (home view) ─────────────────────────────────────
+async function loadStats() {
+  try {
+    const d = await fetchJSON('/api/stats');
+    document.getElementById('header-stats').textContent =
+      `共 ${d.total} 张位置图，${Object.keys(d.drawings).length} 张图纸`;
+
+    // Populate drawing filter dropdown
+    const sel = document.getElementById('drawing-filter');
+    // Keep the first "全部图纸" option
+    while (sel.options.length > 1) sel.remove(1);
+    Object.keys(d.drawings).sort().forEach(label => {
+      const opt = document.createElement('option');
+      opt.value = label;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    });
+
+    // Stat cards
+    const grid = document.getElementById('stats-grid');
+    grid.innerHTML = '';
+    const tot = mk('div', 'stat-card');
+    tot.innerHTML = `<div class="label">全部图片</div>
+                     <div class="num">${d.total}</div>
+                     <div class="sub">点击查看全部</div>`;
+    tot.onclick = () => { setFilter(''); searchAll(); };
+    grid.appendChild(tot);
+
+    Object.entries(d.drawings).forEach(([label, cnt]) => {
+      const c = mk('div', 'stat-card');
+      c.innerHTML = `<div class="label">${label}</div>
+                     <div class="num">${cnt}</div>
+                     <div class="sub">张位置图</div>`;
+      c.onclick = () => { setFilter(label); searchAll(); };
+      grid.appendChild(c);
+    });
+  } catch (e) { console.error('loadStats:', e); }
+}
+
+function showStats() {
+  hide('results-grid'); hide('hint-empty');
+  show('stats-view');
+  setStatus('');
+  pushUrl('', '');
+}
+
+async function searchAll() {
+  const drawing = document.getElementById('drawing-filter').value;
+  hide('stats-view'); hide('hint-empty');
+  show('results-grid', 'grid');
+  try {
+    const data = await fetchJSON(`/api/search_all?drawing=${encodeURIComponent(drawing)}`);
+    currentResults = data.results;
+    renderResults(data);
+  } catch (e) { setStatus('请求失败'); }
+}
+
+// ── Lightbox + Zoom/Pan ──────────────────────────────────
+const lbViewport = document.getElementById('lb-viewport');
+const lbImg      = document.getElementById('lb-img');
+let lbScale = 1, lbTx = 0, lbTy = 0;
+let lbDragging = false, lbDragX = 0, lbDragY = 0;
+
+function lbApplyTransform() {
+  lbImg.style.transform = `translate(${lbTx}px,${lbTy}px) scale(${lbScale})`;
+  document.getElementById('lb-zoom-label').textContent = Math.round(lbScale * 100) + '%';
+}
+function lbResetZoom() { lbScale = 1; lbTx = 0; lbTy = 0; lbApplyTransform(); }
+function lbZoom(factor, cx, cy) {
+  const vw = lbViewport.clientWidth, vh = lbViewport.clientHeight;
+  const px = (cx ?? vw / 2) - vw / 2;
+  const py = (cy ?? vh / 2) - vh / 2;
+  const ns = Math.min(Math.max(lbScale * factor, 0.5), 10);
+  const rt = ns / lbScale;
+  lbTx = px + (lbTx - px) * rt;
+  lbTy = py + (lbTy - py) * rt;
+  lbScale = ns;
+  lbApplyTransform();
+}
+
+lbViewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = lbViewport.getBoundingClientRect();
+  lbZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+
+lbViewport.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  lbDragging = true; lbDragX = e.clientX; lbDragY = e.clientY;
+  lbViewport.classList.add('dragging');
+  e.preventDefault();
+});
+window.addEventListener('mousemove', e => {
+  if (!lbDragging) return;
+  lbTx += e.clientX - lbDragX; lbTy += e.clientY - lbDragY;
+  lbDragX = e.clientX; lbDragY = e.clientY;
+  lbApplyTransform();
+});
+window.addEventListener('mouseup', () => {
+  lbDragging = false; lbViewport.classList.remove('dragging');
+});
+lbViewport.addEventListener('dblclick', lbResetZoom);
+
+// Touch pinch-to-zoom
+let lbTouches = [], lbPinchDist0 = 0, lbScale0 = 1;
+lbViewport.addEventListener('touchstart', e => {
+  lbTouches = [...e.touches];
+  if (e.touches.length === 2) {
+    lbPinchDist0 = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY);
+    lbScale0 = lbScale;
+  }
+}, { passive: true });
+lbViewport.addEventListener('touchmove', e => {
+  if (e.touches.length !== 2) return;
+  e.preventDefault();
+  const dist = Math.hypot(
+    e.touches[0].clientX - e.touches[1].clientX,
+    e.touches[0].clientY - e.touches[1].clientY);
+  lbScale = Math.min(Math.max(lbScale0 * dist / lbPinchDist0, 0.5), 10);
+  lbApplyTransform();
+}, { passive: false });
+
+function openLightbox(i) {
+  lbIndex = i; lbResetZoom(); renderLb();
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+function renderLb() {
+  const r = currentResults[lbIndex];
+  lbImg.src = r.image_url;
+  document.getElementById('lb-tag').textContent = r.tag;
+  document.getElementById('lb-meta').textContent = [
+    r.drawing_label,
+    r.page != null ? `第 ${r.page} 页` : '',
+    r.seq  != null ? `序号 ${r.seq}` : '',
+  ].filter(Boolean).join(' · ');
+  document.getElementById('lb-counter').textContent =
+    `${lbIndex + 1} / ${currentResults.length}`;
+}
+function lbNav(dir) {
+  lbIndex = (lbIndex + dir + currentResults.length) % currentResults.length;
+  lbResetZoom(); renderLb();
+}
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightbox').classList.contains('open')) return;
+  if (e.key === 'Escape')     { closeLightbox(); return; }
+  if (e.key === 'ArrowRight') { lbNav(1); return; }
+  if (e.key === 'ArrowLeft')  { lbNav(-1); return; }
+  if (e.key === '+' || e.key === '=') { lbZoom(1.25); return; }
+  if (e.key === '-')          { lbZoom(0.8); return; }
+  if (e.key === '0')          { lbResetZoom(); return; }
+});
+
+// ── URL state ──────────────────────────────────────────────
+function pushUrl(q, drawing) {
+  const p = new URLSearchParams();
+  if (q)       p.set('q', q);
+  if (drawing) p.set('drawing', drawing);
+  const s = p.toString();
+  history.replaceState(null, '', s ? '?' + s : location.pathname);
+}
+function setFilter(label) {
+  document.getElementById('drawing-filter').value = label;
+}
+
+// ── Helpers ───────────────────────────────────────────────
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+function show(id, display = 'block') { document.getElementById(id).style.display = display; }
+function hide(id) { document.getElementById(id).style.display = 'none'; }
+function setStatus(html) { document.getElementById('status').innerHTML = html; }
+function mk(tag, cls) {
+  const el = document.createElement(tag);
+  el.className = cls;
+  return el;
+}
+
+// ── Init ──────────────────────────────────────────────────
+(async () => {
+  await loadStats();
+  const p = new URLSearchParams(location.search);
+  const q = p.get('q') || '';
+  const d = p.get('drawing') || '';
+  if (d) setFilter(d);
+  if (q) { document.getElementById('q').value = q; doSearch(); }
+  else    showStats();
+})();
+</script>
+</body>
+</html>

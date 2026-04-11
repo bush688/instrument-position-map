@@ -1,0 +1,65 @@
+# 仪表位置图查询系统 — Docker Compose
+#
+# 群晖部署步骤：
+#   1. 将 docker/ 目录上传到群晖（如 /volume1/docker/instrument-map/）
+#   2. 将图片目录（output/ 里的各图纸子目录）上传到 ./data/
+#      可选：将 仪表位置图汇总表.xlsx 放入 ./data/ 根目录
+#   3. 在群晖 Container Manager → 项目 → 新建项目，选择此 compose 文件
+#      或在 SSH 中: cd /volume1/docker/instrument-map && docker compose up -d
+#   4. 浏览器访问 http://<群晖IP>:8088
+#
+# 目录结构（群晖侧）：
+#   instrument-map/
+#   ├── docker-compose.yml        ← 本文件
+#   ├── backend/
+#   │   ├── Dockerfile
+#   │   ├── api.py
+#   │   └── requirements.txt
+#   ├── frontend/
+#   │   ├── Dockerfile
+#   │   ├── nginx.conf
+#   │   └── index.html
+#   └── data/                     ← 上传图片到此处
+#       ├── 变换_21216-040100-IN40/
+#       │   └── *.png
+#       ├── 气化_21216-030000-IN40/
+#       │   └── *.png
+#       └── ...（其他图纸目录）
+
+services:
+
+  backend:
+    build: ./backend
+    container_name: instrument-map-backend
+    restart: unless-stopped
+    environment:
+      - DATA_DIR=/data
+      - PORT=8000
+    volumes:
+      # 将 ./data 挂载为只读数据目录
+      - ./data:/data:ro
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/stats')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build: ./frontend
+    container_name: instrument-map-frontend
+    restart: unless-stopped
+    ports:
+      # 修改 8088 为你希望使用的端口
+      - "${PORT:-8088}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge

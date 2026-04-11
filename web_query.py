@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
-OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "output"))
 
 # ──────────────────────────────────────────────
 # Data model

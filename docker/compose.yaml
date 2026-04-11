@@ -10,7 +10,7 @@
 #
 # 目录结构（群晖侧）：
 #   instrument-map/
-#   ├── docker-compose.yml        ← 本文件
+#   ├── compose.yaml              ← 本文件
 #   ├── backend/
 #   │   ├── Dockerfile
 #   │   ├── api.py
